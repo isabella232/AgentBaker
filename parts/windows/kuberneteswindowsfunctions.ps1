@@ -66,6 +66,44 @@ function Get-ProvisioningScripts {
     Remove-Item -Path 'c:\k\provisioningscripts.zip' -Force
 }
 
+function Get-CalicoPackage {
+    Write-Log "Getting Calico package"
+    DownloadFileOverHttp -Url $global:WindowsCalicoPackageURL -DestinationPath 'c:\calicowindows.zip'
+    Expand-Archive -Path 'c:\calicowindows.zip' -DestinationPath 'c:\' -Force
+    Remove-Item -Path 'c:\calicowindows.zip' -Force
+}
+
+function SetConfigParameters {
+    param(
+        [parameter(Mandatory=$true)] $RootDir,
+        [parameter(Mandatory=$true)] $OldString,
+        [parameter(Mandatory=$true)] $NewString
+    )
+
+    (Get-Content $RootDir\config.ps1).replace($OldString, $NewString) | Set-Content $RootDir\config.ps1 -Force
+}
+
+function GetCalicoKubeConfig {
+    param(
+        [parameter(Mandatory=$true)] $RootDir,
+        [parameter(Mandatory=$true)] $CalicoNamespace,
+        [parameter(Mandatory=$false)] $SecretName = "calico-node",
+        [parameter(Mandatory=$false)] $KubeConfigPath = "c:\\k\\config"
+    )
+
+    $name=c:\k\kubectl.exe --kubeconfig=$KubeConfigPath get secret -n $CalicoNamespace --field-selector=type=kubernetes.io/service-account-token --no-headers -o custom-columns=":metadata.name" | findstr $SecretName | select -first 1
+    if ([string]::IsNullOrEmpty($name)) {
+        throw "$SecretName service account does not exist."
+    }
+    $ca=c:\k\kubectl.exe --kubeconfig=$KubeConfigPath get secret/$name -o jsonpath='{.data.ca\.crt}' -n $CalicoNamespace
+    $tokenBase64=c:\k\kubectl.exe --kubeconfig=$KubeConfigPath get secret/$name -o jsonpath='{.data.token}' -n $CalicoNamespace
+    $token=[System.Text.Encoding]::ASCII.GetString([System.Convert]::FromBase64String($tokenBase64))
+
+    $server=findstr https:// $KubeConfigPath
+
+    (Get-Content $RootDir\calico-kube-config.template).replace('<ca>', $ca).replace('<server>', $server.Trim()).replace('<token>', $token) | Set-Content $RootDir\calico-kube-config -Force
+}
+
 function Get-WindowsVersion {
     $systemInfo = Get-ItemProperty -Path "HKLM:SOFTWARE\Microsoft\Windows NT\CurrentVersion"
     return "$($systemInfo.CurrentBuildNumber).$($systemInfo.UBR)"
